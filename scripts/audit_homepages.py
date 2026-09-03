@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 
-import json
-import os
+import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+from github_auth import gh_environment
+from repository_config import ConfigError, load_repositories
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "repositories.json"
 
 
-def get_homepage(repository: str) -> str | None:
-    env = os.environ.copy()
-    env.pop("GITHUB_TOKEN", None)
+def get_homepage(repository: str, use_stored_gh_auth: bool) -> str | None:
+    env = gh_environment(use_stored_gh_auth)
 
     result = subprocess.run(
         [
@@ -37,16 +38,29 @@ def display(value: str | None) -> str:
 
 
 def main() -> int:
-    config = json.loads(CONFIG_PATH.read_text())
+    parser = argparse.ArgumentParser(description="Audit GitHub repository homepages.")
+    parser.add_argument(
+        "--use-stored-gh-auth",
+        action="store_true",
+        help="Ignore token environment variables and use the stored gh login.",
+    )
+    args = parser.parse_args()
+
+    try:
+        repositories = load_repositories(CONFIG_PATH)
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
+
     has_drift = False
 
-    for repository in config["repositories"]:
-        name = repository["name"]
-        expected = repository.get("homepage")
-        protected = repository.get("protected", False)
+    for repository in repositories:
+        name = repository.name
+        expected = repository.homepage
+        protected = repository.protected
 
         try:
-            current = get_homepage(name)
+            current = get_homepage(name, args.use_stored_gh_auth)
         except subprocess.CalledProcessError as exc:
             print(f"{name}")
             print("  Status: ERROR")
@@ -56,9 +70,12 @@ def main() -> int:
             continue
 
         matches = current == expected
-        status = "OK" if matches else "STALE"
-        if protected:
-            status += " (protected)"
+        if matches:
+            status = "OK (protected)" if protected else "OK"
+        elif protected:
+            status = "REFUSED (protected)"
+        else:
+            status = "STALE"
 
         print(name)
         print(f"  Current:  {display(current)}")

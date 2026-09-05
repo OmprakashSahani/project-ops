@@ -2,7 +2,7 @@
   "repositories": [
     {
       "name": "OmprakashSahani/lerobot-state-atlas",
-      "homepage": null
+      "homepage": "https://lerobot-state-atlas.vercel.app"
     },
     {
       "name": "OmprakashSahani/codex-benchmark-guardian",

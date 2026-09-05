@@ -1,0 +1,17 @@
+{
+  "repositories": [
+    {
+      "name": "OmprakashSahani/lerobot-state-atlas",
+      "homepage": null
+    },
+    {
+      "name": "OmprakashSahani/codex-benchmark-guardian",
+      "homepage": null
+    },
+    {
+      "name": "OmprakashSahani/Krsna",
+      "homepage": "https://krsna-supreme-personality-of-godhead.vercel.app/",
+      "protected": true
+    }
+  ]
+}

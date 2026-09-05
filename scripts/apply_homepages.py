@@ -6,31 +6,12 @@ import sys
 from pathlib import Path
 
 from github_auth import gh_environment
+from homepage_common import display, get_homepage
 from repository_config import ConfigError, RepositoryConfig, load_repositories
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "repositories.json"
-
-
-def get_homepage(repository: str, use_stored_gh_auth: bool) -> str | None:
-    env = gh_environment(use_stored_gh_auth)
-
-    result = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repository}",
-            "--jq",
-            ".homepage // empty",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    homepage = result.stdout.strip()
-    return homepage or None
 
 
 def set_homepage(
@@ -45,15 +26,11 @@ def set_homepage(
             "edit",
             repository,
             "--homepage",
-            homepage or "",
+            "" if homepage is None else homepage,
         ],
         check=True,
         env=env,
     )
-
-
-def display(value: str | None) -> str:
-    return value if value is not None else "(none)"
 
 
 def main() -> int:
@@ -119,21 +96,25 @@ def main() -> int:
             protected_drift = True
             continue
 
-        print(f"{name}: {'APPLY' if args.apply else 'WOULD CHANGE'}")
+        print(f"{name}: WOULD CHANGE")
         print(f"  Current:  {display(current)}")
         print(f"  Expected: {display(expected)}")
 
         print()
         changes.append(repository)
 
+    if protected_drift:
+        print("Protected drift detected; no repositories were modified.")
+        return 1
+
     if not args.apply and changes:
         print("Dry run only. Re-run with --apply to make these changes.")
 
     if not args.apply:
-        return 1 if protected_drift else 0
+        return 0
 
     updated: list[str] = []
-    for repository in changes:
+    for index, repository in enumerate(changes):
         try:
             set_homepage(
                 repository.name,
@@ -145,11 +126,13 @@ def main() -> int:
             print("Apply failed after preflight.")
             print(f"Updated: {', '.join(updated) if updated else '(none)'}")
             print(f"Failed: {repository.name}")
+            pending = [entry.name for entry in changes[index + 1 :]]
+            print(f"Pending (not attempted): {', '.join(pending) if pending else '(none)'}")
             return 1
         updated.append(repository.name)
         print(f"{repository.name}: UPDATED")
 
-    return 1 if protected_drift else 0
+    return 0
 
 
 if __name__ == "__main__":

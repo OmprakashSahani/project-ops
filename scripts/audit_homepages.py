@@ -5,36 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from github_auth import gh_environment
+from homepage_common import display, get_homepage
 from repository_config import ConfigError, load_repositories
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "repositories.json"
-
-
-def get_homepage(repository: str, use_stored_gh_auth: bool) -> str | None:
-    env = gh_environment(use_stored_gh_auth)
-
-    result = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repository}",
-            "--jq",
-            ".homepage // empty",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    homepage = result.stdout.strip()
-    return homepage or None
-
-
-def display(value: str | None) -> str:
-    return value if value is not None else "(none)"
 
 
 def main() -> int:

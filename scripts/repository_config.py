@@ -35,6 +35,8 @@ def load_repositories(path: Path) -> list[RepositoryConfig]:
 
     if not isinstance(raw, dict) or not isinstance(raw.get("repositories"), list):
         raise ConfigError('top-level "repositories" must be a list')
+    if not raw["repositories"]:
+        raise ConfigError('"repositories" must contain at least one repository')
 
     repositories: list[RepositoryConfig] = []
     seen: set[str] = set()
@@ -43,6 +45,11 @@ def load_repositories(path: Path) -> list[RepositoryConfig]:
         label = f"repository entry {index}"
         if not isinstance(entry, dict):
             raise ConfigError(f"{label} must be an object")
+        unknown_fields = entry.keys() - {"name", "homepage", "protected"}
+        if unknown_fields:
+            raise ConfigError(
+                f"{label} has unknown fields: {', '.join(sorted(unknown_fields))}"
+            )
         if "name" not in entry:
             raise ConfigError(f'{label} is missing required field "name"')
         if "homepage" not in entry:

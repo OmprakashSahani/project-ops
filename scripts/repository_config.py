@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import unicodedata
 
 
 REPOSITORY_NAME = re.compile(
@@ -23,17 +24,33 @@ class RepositoryConfig:
     protected: bool = False
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ConfigError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
 def load_repositories(path: Path) -> list[RepositoryConfig]:
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
     except OSError as exc:
         raise ConfigError(f"cannot read {path}: {exc}") from exc
+    except UnicodeError as exc:
+        raise ConfigError(f"configuration must be UTF-8: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(
             f"invalid JSON in {path} at line {exc.lineno}, column {exc.colno}"
         ) from exc
 
-    if not isinstance(raw, dict) or not isinstance(raw.get("repositories"), list):
+    if not isinstance(raw, dict):
+        raise ConfigError("top-level configuration must be an object")
+    unknown_fields = raw.keys() - {"repositories"}
+    if unknown_fields:
+        raise ConfigError(f"top-level has unknown fields: {', '.join(sorted(unknown_fields))}")
+    if not isinstance(raw.get("repositories"), list):
         raise ConfigError('top-level "repositories" must be a list')
     if not raw["repositories"]:
         raise ConfigError('"repositories" must contain at least one repository')
@@ -70,6 +87,13 @@ def load_repositories(path: Path) -> list[RepositoryConfig]:
         if isinstance(homepage, str) and not homepage.strip():
             raise ConfigError(
                 f'{label} field "homepage" must be a non-empty string or null'
+            )
+        if isinstance(homepage, str) and any(
+            unicodedata.category(character) in {"Cc", "Cs"} for character in homepage
+        ):
+            raise ConfigError(
+                f'{label} field "homepage" must not contain control characters '
+                "or unpaired surrogates"
             )
         if "protected" in entry and not isinstance(protected, bool):
             raise ConfigError(f'{label} field "protected" must be a boolean')

@@ -1,36 +1,65 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
 
-from github_auth import gh_environment
-from homepage_common import display, get_homepage
-from repository_config import ConfigError, RepositoryConfig, load_repositories
+from github_auth import GITHUB_HOST, gh_environment
+from homepage_common import RepositoryState, display, get_repository, identity_errors
+from repository_config import REPOSITORY_NAME, ConfigError, RepositoryConfig, load_repositories
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "repositories.json"
+UPDATE_HOMEPAGE = """
+mutation($input: UpdateRepositoryInput!) {
+  updateRepository(input: $input) {
+    repository { id nameWithOwner homepageUrl }
+  }
+}
+"""
 
 
 def set_homepage(
-    repository: str, homepage: str | None, use_stored_gh_auth: bool
+    node_id: str, homepage: str | None, use_stored_gh_auth: bool
 ) -> None:
     env = gh_environment(use_stored_gh_auth)
+    expected = "" if homepage is None else homepage
 
-    subprocess.run(
+    result = subprocess.run(
         [
-            "gh",
-            "repo",
-            "edit",
-            repository,
-            "--homepage",
-            "" if homepage is None else homepage,
+            "gh", "api", "graphql", "--hostname", GITHUB_HOST,
+            "--method", "POST", "--input", "-",
         ],
+        input=json.dumps({
+            "query": UPDATE_HOMEPAGE,
+            "variables": {"input": {"repositoryId": node_id, "homepageUrl": expected}},
+        }),
         check=True,
+        capture_output=True,
+        text=True,
         env=env,
     )
+    raw = json.loads(result.stdout)
+    if not isinstance(raw, dict) or raw.get("errors"):
+        raise ValueError("invalid GitHub mutation response or GraphQL errors")
+    try:
+        updated = raw["data"]["updateRepository"]["repository"]
+    except (KeyError, TypeError):
+        raise ValueError("invalid GitHub mutation response: missing repository") from None
+    if (
+        not isinstance(updated, dict)
+        or updated.get("id") != node_id
+        or not isinstance(updated.get("nameWithOwner"), str)
+        or REPOSITORY_NAME.fullmatch(updated["nameWithOwner"]) is None
+        or "homepageUrl" not in updated
+        or not isinstance(updated["homepageUrl"], (str, type(None)))
+        or (updated["homepageUrl"] or "") != expected
+    ):
+        raise ValueError("unexpected GitHub mutation response: repository ID or homepage")
+    # Names may change after preflight; only the captured immutable ID must match.
 
 
 def main() -> int:
@@ -55,24 +84,34 @@ def main() -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
 
-    current_homepages: dict[str, str | None] = {}
+    repository_states: dict[str, RepositoryState] = {}
     preflight_errors: list[str] = []
+    canonical_names: dict[str, str] = {}
 
     for repository in repositories:
         try:
-            current_homepages[repository.name] = get_homepage(
+            current = get_repository(
                 repository.name, args.use_stored_gh_auth
             )
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
             print(f"{repository.name}")
             print("  Status: ERROR")
-            print(f"  {exc.stderr.strip()}")
+            detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+            print(f"  {(detail or str(exc)).strip()}")
             print()
+            preflight_errors.append(repository.name)
+            continue
+
+        repository_states[repository.name] = current
+        errors = identity_errors(repository.name, current.full_name, canonical_names)
+        if errors:
+            for error in errors:
+                print(error)
             preflight_errors.append(repository.name)
 
     if preflight_errors:
         print("Preflight failed; no repositories were modified.")
-        print(f"Failed to read: {', '.join(preflight_errors)}")
+        print(f"Failed preflight: {', '.join(preflight_errors)}")
         return 1
 
     changes: list[RepositoryConfig] = []
@@ -82,7 +121,7 @@ def main() -> int:
         name = repository.name
         expected = repository.homepage
         protected = repository.protected
-        current = current_homepages[name]
+        current = repository_states[name].homepage
 
         if current == expected:
             print(f"{name}: OK")
@@ -117,12 +156,14 @@ def main() -> int:
     for index, repository in enumerate(changes):
         try:
             set_homepage(
-                repository.name,
+                repository_states[repository.name].node_id,
                 repository.homepage,
                 args.use_stored_gh_auth,
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
             print(f"{repository.name}: ERROR")
+            detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+            print(f"  {(detail or str(exc)).strip()}")
             print("Apply failed after preflight.")
             print(f"Updated: {', '.join(updated) if updated else '(none)'}")
             print(f"Failed: {repository.name}")

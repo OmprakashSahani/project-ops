@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from homepage_common import display, get_homepage
+from homepage_common import display, get_repository, identity_errors
 from repository_config import ConfigError, load_repositories
 
 
@@ -29,6 +29,7 @@ def main() -> int:
         return 2
 
     has_drift = False
+    canonical_names: dict[str, str] = {}
 
     for repository in repositories:
         name = repository.name
@@ -36,17 +37,22 @@ def main() -> int:
         protected = repository.protected
 
         try:
-            current = get_homepage(name, args.use_stored_gh_auth)
-        except subprocess.CalledProcessError as exc:
+            resolved = get_repository(name, args.use_stored_gh_auth)
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
             print(f"{name}")
             print("  Status: ERROR")
-            print(f"  {exc.stderr.strip()}")
+            detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+            print(f"  {(detail or str(exc)).strip()}")
             print()
             has_drift = True
             continue
 
+        current = resolved.homepage
+        errors = identity_errors(name, resolved.full_name, canonical_names)
         matches = current == expected
-        if matches:
+        if errors:
+            status = "ERROR (repository identity)"
+        elif matches:
             status = "OK (protected)" if protected else "OK"
         elif protected:
             status = "REFUSED (protected)"
@@ -54,12 +60,15 @@ def main() -> int:
             status = "STALE"
 
         print(name)
+        print(f"  Canonical: {resolved.full_name}")
         print(f"  Current:  {display(current)}")
         print(f"  Expected: {display(expected)}")
         print(f"  Status:   {status}")
+        for error in errors:
+            print(f"  {error}")
         print()
 
-        if not matches:
+        if errors or not matches:
             has_drift = True
 
     return 1 if has_drift else 0

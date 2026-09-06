@@ -745,7 +745,7 @@ class CliIntegrationTestCase(unittest.TestCase):
                 "OmprakashSahani/Krsna",
                 "https://krsna-supreme-personality-of-godhead.vercel.app/"
             )]
-            + [mutation_response(entry["name"]) for entry in json.loads(raw_json)["repositories"][:2]],
+            + [mutation_response(entry["name"], entry["homepage"]) for entry in json.loads(raw_json)["repositories"][:2]],
             raw_json=raw_json,
         )
         self.assertEqual(result, 0)
